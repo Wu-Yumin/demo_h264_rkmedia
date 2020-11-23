@@ -26,11 +26,11 @@ static FILE *g_save_file;
 static MPP_CHN_S stSrcChn;
 static MPP_CHN_S stDestChn;
 
+static bool quit = false;
 static void sigterm_handler(int sig)
 {
   fprintf(stderr, "signal %d\n", sig);
-  rkmedia_h264_enc_exit();
-  exit(0);
+  quit = true;
 }
 
 static void video_packet_cb(MEDIA_BUFFER mb)
@@ -46,11 +46,34 @@ static void video_packet_cb(MEDIA_BUFFER mb)
   RK_MPI_MB_ReleaseBuffer(mb);
 }
 
-int rkmedia_h264_enc_init(void)
+int rkmedia_h264_enc_init(int argc, char **argv)
 {
   int ret = 0;
 
   RK_MPI_SYS_Init();
+
+#ifdef RKAIQ
+  rk_aiq_working_mode_t hdr_mode = RK_AIQ_WORKING_MODE_NORMAL;
+  RK_BOOL fec_enable = RK_FALSE;
+  int fps = 30;
+  char *iq_file_dir = NULL;
+  if ((argc > 1) && !strcmp(argv[1], "-h")) {
+    printf("\n\n/Usage:./%s [--aiq iq_file_dir]\n", argv[0]);
+    printf("\t --aiq iq_file_dir : init isp\n");
+    return -1;
+  }
+  if (argc == 3) {
+    if (strcmp(argv[1], "--aiq") == 0) {
+      iq_file_dir = argv[2];
+    }
+  }
+  SAMPLE_COMM_ISP_Init(hdr_mode, fec_enable, iq_file_dir);
+  SAMPLE_COMM_ISP_Run();
+  SAMPLE_COMM_ISP_SetFrameRate(fps);
+#else
+  (void)argc;
+  (void)argv;
+#endif
 
   VI_CHN_ATTR_S vi_chn_attr;
   vi_chn_attr.pcVideoNode = "rkispp_scale0";
@@ -124,15 +147,18 @@ int rkmedia_h264_enc_init(void)
 
 void rkmedia_h264_enc_exit(void)
 {
-  #ifdef ENABLE_SAVE
+#ifdef ENABLE_SAVE
   if (g_save_file) {
     printf("#VENC TEST:: Close save file!\n");
     fclose(g_save_file);
   }
-  #endif
+#endif
+#ifdef RKAIQ
+  SAMPLE_COMM_ISP_Stop(); // isp aiq stop before vi streamoff
+#endif
   RK_MPI_SYS_UnBind(&stSrcChn, &stDestChn);
-  RK_MPI_VI_DisableChn(0, 1);
   RK_MPI_VENC_DestroyChn(0);
+  RK_MPI_VI_DisableChn(0, 1);
   printf("%s\n", __func__);
 }
 
@@ -141,15 +167,15 @@ void demo_running(void)
   signal(SIGINT, sigterm_handler);
   printf("\n\n>>> demo_h264_rkmedia is running...\n");
   printf("Press Ctrl + C to exit this program.\n\n");
-  while(1) {
-    sleep(1);
+  while(!quit) {
+    usleep(1000);
   }
 }
 
 int main(int argc, char **argv)
 {
   int ret;
-  ret = rkmedia_h264_enc_init();
+  ret = rkmedia_h264_enc_init(argc, argv);
   if(ret) {
     printf("rkmedia_h264_enc_init failed!\n");
     return -1;
